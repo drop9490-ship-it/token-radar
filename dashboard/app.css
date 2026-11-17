@@ -38,7 +38,7 @@ body {
 .meta { margin: 0 0 16px; color: var(--faint); font-size: 13px; }
 
 .stats {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
   padding: 0 28px 16px;
 }
 .stat {
@@ -117,6 +117,9 @@ td .pill {
 
 .model { padding: 8px 28px 0; max-width: 980px; }
 .model h2 { font-size: 19px; margin: 22px 0 6px; }
+.cal { font-size: 13px; }
+.cal td { white-space: normal; }
+.cal tr.total td { font-weight: 700; color: var(--amber); }
 .model .formula {
   background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--green);
   border-radius: 8px; padding: 12px 14px; font-family: ui-monospace, Menlo, Consolas, monospace;

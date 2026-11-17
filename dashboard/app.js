@@ -4,10 +4,11 @@
 // stated in full in the Model section of index.html; this file only renders
 // what the model scored, and never re-scores a row.
 //
-// Implied value = TVL x sector multiple x growth x maturity x chains, where
+// Implied value = TVL x sector multiple x growth x maturity x chains x risk, where
 // the sector multiple is the category's median market-cap / TVL among the
 // snapshot's own live-token protocols (ratios winsorised at the 90th
-// percentile, shrunk toward the global median, clamped to 0.02-1.50).
+// percentile, shrunk toward the global median, clamped to 0.02-1.50), and
+// risk is 0.90 for TVL under $10M, else 1.00.
 
 (function () {
   'use strict';
@@ -82,6 +83,7 @@
     stat(D.protocols_scanned, 'protocols scanned') +
     stat(D.watchlist_size, 'on the watchlist') +
     stat(D.board_size, 'rows on the board') +
+    stat(D.calibration_protocols, 'live comps behind the multiples') +
     stat(fmtMult(D.global_multiple), 'global sector multiple');
   function stat(big, label) {
     return '<div class="stat"><b>' + esc(big) + '</b><span>' + esc(label) + '</span></div>';
@@ -201,9 +203,10 @@
       mathRow('Growth (' + pct(r.change_7d) + ' in 7 days)', '×' + r.growth_multiplier.toFixed(3)) +
       mathRow('Maturity (' + ageText(r.age_days) + ' tracked)', '×' + r.maturity_multiplier.toFixed(3)) +
       mathRow('Chains (' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + ')', '×' + r.chain_multiplier.toFixed(3)) +
+      mathRow('Risk (' + (r.risk_multiplier < 1 ? 'thin TVL under $10M' : 'TVL above $10M') + ')', '×' + r.risk_multiplier.toFixed(3)) +
       '<tr class="total"><td>Implied value</td><td>' + moneyFull(r.implied_value_usd) + '</td></tr>' +
       '</tbody></table>' +
-      '<h3>Farm plan — 7 steps</h3>' +
+      '<h3>Farm plan — 8 steps</h3>' +
       '<ol class="steps">' + steps + '</ol>' +
       '<p class="note">This protocol records no token. The plan is this radar\u2019s own reading of its record, not a promise of a launch.</p>';
     function mathRow(label, value) {
