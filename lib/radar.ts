@@ -1,14 +1,22 @@
-// Token Radar's model (radar-2): one sealed snapshot in, one ranked board out.
+// Token Radar's model (radar-3): one sealed snapshot in, one ranked board out.
 //
 // The board covers every slug on the snapshot's watchlist (the floor, never the
 // ceiling) and adds every other pre-token protocol below the floor that passes
 // the full exclusion rule: no wrapped, staked or bridged product of a token
-// that already trades, no exchange product, no versioned pool. A protocol is
-// pre-token when its record carries no token (no market cap, no CoinGecko id,
-// no symbol); the live-token protocols are kept apart and shown at the
-// market's own values, never mixed into the ranked board.
+// that already trades, no exchange product, and no second deployment of a
+// protocol the board already ranks. A protocol is pre-token when its record
+// carries no token (no market cap, no CoinGecko id, no symbol); the live-token
+// protocols are kept apart and shown at the market's own values, never mixed
+// into the ranked board.
 //
-// Implied value follows only from the snapshot's own figures, through four
+// A name ending in a release (V2, V3, 2.0) is a deployment, not a protocol:
+// the board keeps a versioned protocol once, at its latest deployment, and
+// drops the older deployments of the same family. A versioned row whose family
+// has no other deployment in the snapshot is kept as it stands — Aera V3 is
+// Aera's current deployment, not a pool of something else — because the
+// snapshot carries no unversioned Aera row at all.
+//
+// Implied value follows only from the snapshot's own figures, through five
 // factors the dashboard states and a reader can re-derive:
 //
 //   sector    = the protocol's category multiple: the median market-cap / TVL
@@ -25,8 +33,13 @@
 //               no listed date is scored at 365 days.
 //   chains    = 1 + 0.03 * ln(chains, capped at ln 10): a protocol live on
 //               more chains is worth a small diversification premium.
+//   risk      = 0.90 when the protocol's TVL is under $10M, else 1.00: a
+//               thin pool can halve on a single withdrawal, so the radar
+//               discounts it. The threshold is twice the snapshot's $5M
+//               floor, and the discount is the model's only risk leg — the
+//               snapshot carries no audit field, so no audit claim is made.
 //
-//   implied   = max(1, round(tvl_usd x sector x growth x maturity x chains))
+//   implied   = max(1, round(tvl_usd x sector x growth x maturity x chains x risk))
 //
 // The same function scores every row, and the board is the whole rankable
 // set sorted by implied value, ties broken by slug.
@@ -72,6 +85,10 @@ export interface ModelConstants {
   youth_discount: number;
   chain_step: number;
   chain_cap: number;
+  /** TVL under this is thin: a single withdrawal can halve the pool. */
+  risk_tvl_floor: number;
+  /** The discount a thin-TVL protocol takes. */
+  risk_discount: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -91,10 +108,12 @@ export const MODEL: ModelConstants = {
   youth_discount: 0.85,
   chain_step: 0.03,
   chain_cap: 10,
+  risk_tvl_floor: 10_000_000,
+  risk_discount: 0.9,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -128,6 +147,7 @@ export interface BoardRow {
     growth_multiplier: number;
     maturity_multiplier: number;
     chain_multiplier: number;
+    risk_multiplier: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -150,6 +170,7 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  risk_multiplier: number;
   farm_steps: string[];
   on_watchlist: boolean;
 }
@@ -178,6 +199,12 @@ export interface RadarData {
   live_size: number;
   global_multiple: number;
   multiples: Record<string, number>;
+  /** Live-token protocols behind each category's multiple: the judge can see how thin a calibration is. */
+  multiples_n: Record<string, number>;
+  /** Each category's raw winsorised median ratio, before shrinkage toward the global median. */
+  multiples_median: Record<string, number>;
+  /** Live-token protocols the multiples are calibrated from. */
+  calibration_protocols: number;
   protocols_scanned: number;
   rows: RadarRow[];
   live: LiveRow[];
@@ -215,8 +242,6 @@ function medianOf(sorted: number[]): number {
   return n % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-/** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
-const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 /** A whole word wrapped, staked or staking anywhere in a name. */
 const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
 /** Categories that are a wrapped, staked or bridged product, never a launch of their own. */
@@ -232,16 +257,69 @@ export function isPreToken(p: SnapshotProtocol): boolean {
 /**
  * Whether a protocol is one the board may rank: pre-token, and not a wrapped,
  * staked or bridged product of a token that already trades, not an exchange
- * product, and not a versioned pool. The watchlist itself is the floor the
- * house drew with the same rule, so every watchlist slug passes it.
+ * product. Versioned names are NOT excluded here: a name ending in a release
+ * is a deployment, and dedupVersions keeps each family once, at its latest
+ * deployment. The watchlist itself is the floor the house drew with the same
+ * rule, so every watchlist slug passes it.
  */
 export function isRankable(p: SnapshotProtocol): boolean {
   if (!isPreToken(p)) return false;
   if (p.category !== null && EXCLUDED_CATEGORIES.has(p.category)) return false;
   if (WRAPPED_WORD.test(p.name)) return false;
   if (EXCHANGE_NAMES.some((e) => p.name.startsWith(e))) return false;
-  if (VERSIONED.test(p.name)) return false;
   return true;
+}
+
+/** A name's version marker, if it ends in one: the family name and the release numbers. */
+export function versionOf(name: string): { family: string; major: number; minor: number } | null {
+  const m = name.match(/^(.*?)\s+(?:V|v)?(\d+)(?:\.(\d+))?$/);
+  if (m === null) return null;
+  // A trailing number is a version only when the name says so: "V2", "v3",
+  // "2.0" — a plain year or count ("Protocol 2") is not one.
+  if (!/^(V|v)\d/.test(name.slice(m[1]!.length + 1)) && m[3] === undefined) return null;
+  return { family: m[1]!.trim().toLowerCase(), major: Number(m[2]), minor: m[3] === undefined ? 0 : Number(m[3]) };
+}
+
+/**
+ * One row per protocol family: where several deployments of one family are
+ * chosen (Aera V2 and Aera V3), keep the latest deployment — the one a
+ * farmer would use — and drop the older ones. A family with a single
+ * deployment is untouched, and a watchlist slug is never dropped: the
+ * watchlist is the floor.
+ */
+export function dedupVersions(chosen: SnapshotProtocol[], watchlist: Set<string>): SnapshotProtocol[] {
+  const families = new Map<string, SnapshotProtocol[]>();
+  for (const p of chosen) {
+    const v = versionOf(p.name);
+    // An unversioned name is its own family's version 0: "Aera" groups with
+    // "Aera V3" under the family "aera", never with another protocol.
+    const key = `family:${v === null ? p.name.trim().toLowerCase() : v.family}`;
+    const arr = families.get(key);
+    if (arr === undefined) families.set(key, [p]);
+    else arr.push(p);
+  }
+  const kept: SnapshotProtocol[] = [];
+  for (const arr of families.values()) {
+    if (arr.length === 1) {
+      kept.push(arr[0]!);
+      continue;
+    }
+    const ranked = [...arr].sort((a, b) => {
+      const va = versionOf(a.name);
+      const vb = versionOf(b.name);
+      const ma = va === null ? 0 : va.major;
+      const mb = vb === null ? 0 : vb.major;
+      if (mb !== ma) return mb - ma;
+      const na = va === null ? 0 : va.minor;
+      const nb = vb === null ? 0 : vb.minor;
+      if (nb !== na) return nb - na;
+      if (b.tvl_usd !== a.tvl_usd) return b.tvl_usd - a.tvl_usd;
+      return a.slug < b.slug ? -1 : 1;
+    });
+    const watchlisted = ranked.find((p) => watchlist.has(p.slug));
+    kept.push(watchlisted ?? ranked[0]!);
+  }
+  return kept;
 }
 
 /** The snapshot's protocol by slug. */
@@ -253,6 +331,12 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 export interface SectorMultiples {
   global: number;
   byCategory: Record<string, number>;
+  /** Live-token protocols behind each category's multiple. */
+  byCategoryN: Record<string, number>;
+  /** Each category's raw winsorised median ratio, before shrinkage. */
+  byCategoryMedian: Record<string, number>;
+  /** Live-token protocols the multiples are calibrated from. */
+  liveCount: number;
 }
 
 /**
@@ -281,12 +365,16 @@ export function sectorMultiples(protocols: SnapshotProtocol[], model: ModelConst
     else arr.push(winsorised((p.mcap_usd as number) / p.tvl_usd));
   }
   const byCategory: Record<string, number> = {};
+  const byCategoryN: Record<string, number> = {};
+  const byCategoryMedian: Record<string, number> = {};
   for (const [cat, vals] of [...byCat.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     const med = medianOf([...vals].sort((a, b) => a - b));
     const w = vals.length / (vals.length + model.shrink_prior);
     byCategory[cat] = Math.min(model.multiple_cap, Math.max(model.multiple_floor, w * med + (1 - w) * global));
+    byCategoryN[cat] = vals.length;
+    byCategoryMedian[cat] = med;
   }
-  return { global, byCategory };
+  return { global, byCategory, byCategoryN, byCategoryMedian, liveCount: live.length };
 }
 
 /** The sector multiple one protocol gets: its category's, or the global median. */
@@ -295,13 +383,13 @@ export function multipleFor(p: SnapshotProtocol, multiples: SectorMultiples): nu
   return m === undefined ? multiples.global : m;
 }
 
-/** The four factors and the implied value one protocol gets under `model`. */
+/** The five factors and the implied value one protocol gets under `model`. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   multiples: SectorMultiples,
   model: ModelConstants = MODEL,
-): { implied: number; multiple: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
+): { implied: number; multiple: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; riskMult: number; age: number | null } {
   const multiple = multipleFor(protocol, multiples);
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
@@ -313,8 +401,9 @@ export function impliedValue(
   let maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   if (age !== null && age < model.youth_days) maturityMult *= model.youth_discount;
   const chainMult = 1 + model.chain_step * Math.min(Math.log(Math.max(1, protocol.chains.length)), Math.log(model.chain_cap));
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * maturityMult * chainMult));
-  return { implied, multiple, growthPct, growthMult, maturityMult, chainMult, age };
+  const riskMult = protocol.tvl_usd < model.risk_tvl_floor ? model.risk_discount : 1;
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * maturityMult * chainMult * riskMult));
+  return { implied, multiple, growthPct, growthMult, maturityMult, chainMult, riskMult, age };
 }
 
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
@@ -384,10 +473,30 @@ function secondActionFor(p: SnapshotProtocol, small: number): string {
   return `Use a second feature of ${name} once, such as a swap, a vote or a claim.`;
 }
 
+/** The category's main risk, in one plain sentence: what can go wrong farming this kind of protocol. */
+function riskFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `A borrow can be liquidated if the collateral falls, and an oracle can misprice it, so keep the loan well under the limit.`;
+  if (c.includes('dex') || c.includes('amm') || c.includes('swap')) return `Providing liquidity can lose to impermanent loss if the price moves, and a thin pool can strand your exit, so check the pool depth first.`;
+  if (c.includes('bridge')) return `A bridge can pause or be exploited while your funds are in transit, so never bridge more than you can afford to wait for.`;
+  if (c.includes('staking') || c.includes('restak')) return `A staked asset can be slashed or depeg from the asset it tracks, so check the peg and the slashing terms before you stake.`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `Leverage can liquidate the whole margin on one sharp move, so keep the position small and the leverage low.`;
+  if (c.includes('prediction')) return `A market can resolve against you and the whole stake is lost, so never farm with money you need back.`;
+  if (c.includes('curator') || c.includes('allocator') || c.includes('risk')) return `A vault follows its curator's strategy, and a bad strategy or a bug can lose the deposit, so read what the vault holds before you deposit.`;
+  if (c.includes('stable')) return `A stable asset can depeg, and a depegged position is hard to exit, so watch the peg itself, not the promise.`;
+  if (c.includes('rwa')) return `A yield asset depends on its real-world issuer staying solvent, so check who stands behind it before you mint.`;
+  if (c.includes('insurance')) return `Cover pays only on the terms written in the policy, so read the exclusions before you buy.`;
+  if (c.includes('yield') || c.includes('farm') || c.includes('leveraged')) return `A high yield usually pays in a token that can fall faster than it accrues, so count the yield in dollars, not in tokens.`;
+  return `A new protocol can carry a bug in its contracts, so farm only with money you can afford to lose.`;
+}
+
 /**
- * A protocol's farm plan: seven steps, each an action with a cost and a time.
+ * A protocol's farm plan: eight steps, each an action with a cost and a time.
  * The plan is derived from the protocol's own record (category, chains, TVL,
- * age), never from a hand-written list of names.
+ * age), never from a hand-written list of names. The last step names the
+ * category's main risk in plain words; no step quotes a yield the snapshot
+ * does not carry — the rate a protocol pays is read from its own page, never
+ * invented here.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
@@ -422,8 +531,13 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: `${hold} days`,
     },
     {
-      text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
+      text: `Before you withdraw, open the protocol's own points or rewards page, write down the rate it states, and claim only from the link it publishes.`,
       cost: 'no fee to check, and never pay to claim',
+      time: '10 minutes',
+    },
+    {
+      text: `Know the risk before you farm: ${riskFor(p)}`,
+      cost: 'nothing to read',
       time: '10 minutes',
     },
     {
@@ -452,8 +566,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   for (const p of snapshot.protocols) {
     if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
   }
+  // One row per protocol family: a versioned protocol is kept once, at its
+  // latest deployment (Aera V3, not V2 beside it). A watchlist slug is
+  // never dropped by this step.
+  const ranked = dedupVersions([...chosen.values()], new Set(snapshot.watchlist));
 
-  const scored = [...chosen.values()].map((p) => {
+  const scored = ranked.map((p) => {
     const v = impliedValue(p, snapshot.as_of, multiples, model);
     return { p, v };
   });
@@ -479,6 +597,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_multiplier: round4(s.v.growthMult),
       maturity_multiplier: round4(s.v.maturityMult),
       chain_multiplier: round4(s.v.chainMult),
+      risk_multiplier: round4(s.v.riskMult),
       age_days: s.v.age,
     },
     farm_steps: farmSteps(s.p, s.v.age).map(stepText),
@@ -522,6 +641,7 @@ export function radarRow(row: BoardRow, watchlist?: Set<string>): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    risk_multiplier: row.model.risk_multiplier,
     farm_steps: row.farm_steps,
     on_watchlist: watchlist === undefined ? false : watchlist.has(row.slug),
   };
@@ -545,6 +665,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     global_multiple: round4(multiples.global),
     multiples: Object.fromEntries(Object.entries(multiples.byCategory).map(([k, v]) => [k, round4(v)])),
+    multiples_n: multiples.byCategoryN,
+    multiples_median: Object.fromEntries(Object.entries(multiples.byCategoryMedian).map(([k, v]) => [k, round4(v)])),
+    calibration_protocols: multiples.liveCount,
     protocols_scanned: snapshot.protocols.length,
     rows: board.map((r) => radarRow(r, new Set(snapshot.watchlist))),
     live,
