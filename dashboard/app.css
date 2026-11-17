@@ -69,14 +69,14 @@ body {
 .views button.on { background: var(--green); color: #06130c; border-color: var(--green); font-weight: 700; }
 
 .layout {
-  display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(300px, 1fr);
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   gap: 16px; padding: 0 28px; align-items: start;
 }
 .board-wrap { min-width: 0; }
 .count { color: var(--dim); margin: 0 0 8px; font-size: 13px; }
 .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
-table { width: 100%; border-collapse: collapse; background: var(--panel); }
-th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); font-size: 14px; }
+th, td { padding: 8px 8px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; position: sticky; top: 0; background: var(--panel-2); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr { cursor: pointer; }

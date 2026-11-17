@@ -127,7 +127,7 @@
       '<td class="num">' + r.rank + '</td>' +
       '<td><span class="name">' + esc(r.name) + '</span>' + badge + '<br><span class="slug">' + esc(r.slug) + '</span></td>' +
       '<td>' + (r.category ? '<span class="pill">' + esc(r.category) + '</span>' : '—') + '</td>' +
-      '<td>' + esc(r.chains.slice(0, 3).join(', ')) + (r.chains.length > 3 ? ' +' + (r.chains.length - 3) : '') + '</td>' +
+      '<td>' + esc(r.chains.slice(0, 2).join(', ')) + (r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') + '</td>' +
       '<td class="num">' + money(r.tvl_usd) + '</td>' +
       '<td class="num ' + chgCls + '">' + pct(chg) + '</td>' +
       '<td class="num">' + ageText(r.age_days) + '</td>' +
@@ -158,7 +158,7 @@
         '<td class="num">' + (i + 1) + '</td>' +
         '<td><span class="name">' + esc(p.name) + '</span><br><span class="slug">' + esc(p.slug) + '</span></td>' +
         '<td>' + (p.category ? '<span class="pill">' + esc(p.category) + '</span>' : '—') + '</td>' +
-        '<td>' + esc(p.chains.slice(0, 3).join(', ')) + (p.chains.length > 3 ? ' +' + (p.chains.length - 3) : '') + '</td>' +
+        '<td>' + esc(p.chains.slice(0, 2).join(', ')) + (p.chains.length > 2 ? ' +' + (p.chains.length - 2) : '') + '</td>' +
         '<td class="num">' + money(p.tvl_usd) + '</td>' +
         '<td class="num ' + chgCls + '">' + pct(chg) + '</td>' +
         '<td class="num">—</td>' +
