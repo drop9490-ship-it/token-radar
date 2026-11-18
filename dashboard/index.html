@@ -26,13 +26,18 @@
   <label>Chain
     <select id="chain"><option value="">All chains</option></select>
   </label>
-  <label>Sort by
-    <select id="sort">
-      <option value="rank">Rank (implied value)</option>
-      <option value="tvl">TVL</option>
-      <option value="growth">7-day change</option>
-      <option value="age">Age (oldest first)</option>
-      <option value="name">Name A–Z</option>
+  <label>Token status
+    <select id="status">
+      <option value="">Pre-token (the board)</option>
+      <option value="live">Already trading</option>
+    </select>
+  </label>
+  <label>Min TVL
+    <select id="mintvl">
+      <option value="0">Any TVL</option>
+      <option value="50000000">$50M and up</option>
+      <option value="100000000">$100M and up</option>
+      <option value="1000000000">$1B and up</option>
     </select>
   </label>
   <div class="views" role="group" aria-label="View">
@@ -41,6 +46,8 @@
   </div>
 </nav>
 
+<div class="chips" id="chips" aria-label="Active filters"></div>
+
 <main class="layout">
   <section class="board-wrap">
     <p class="count" id="count"></p>
@@ -48,19 +55,22 @@
       <table id="board">
         <thead>
           <tr>
-            <th class="num">#</th>
-            <th>Protocol</th>
-            <th>Category</th>
-            <th>Chains</th>
-            <th class="num">TVL</th>
-            <th class="num">7d</th>
-            <th class="num">Age</th>
-            <th class="num">Implied value</th>
+            <th class="num" data-sort="rank" aria-sort="descending"># <span class="arrow">▼</span></th>
+            <th data-sort="name">Protocol <span class="arrow"></span></th>
+            <th data-sort="category">Category <span class="arrow"></span></th>
+            <th data-sort="chains">Chains <span class="arrow"></span></th>
+            <th class="num" data-sort="tvl">TVL <span class="arrow"></span></th>
+            <th class="num" data-sort="growth">7d <span class="arrow"></span></th>
+            <th class="num" data-sort="age">Age <span class="arrow"></span></th>
+            <th class="num" data-sort="implied">Implied mcap <span class="arrow"></span></th>
+            <th class="num" data-sort="fdv">Implied FDV <span class="arrow"></span></th>
+            <th data-sort="status">Status <span class="arrow"></span></th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
+    <p class="pager" id="pager"></p>
     <p class="note" id="board-note"></p>
   </section>
 
@@ -71,12 +81,20 @@
 
 <section class="model" id="model">
   <h2>How the radar scores a protocol</h2>
-  <p class="formula">implied value = TVL × sector multiple × growth × maturity × chains × risk</p>
+  <p class="formula">base value = TVL × sector multiple<br>growth-adjusted = base × growth<br>implied value = base × growth × maturity × chains × risk<br>implied FDV = TVL × sector FDV multiple × growth × maturity × chains × risk</p>
   <dl>
-    <dt>Sector multiple</dt>
-    <dd>Each category's median market-cap / TVL among the snapshot's own live-token protocols, ratios winsorised at the 90th percentile, then shrunk toward the global median with weight n / (n + 4) and clamped to 0.02–1.50. A category with no live protocol takes the global median. The multiple is a property of the snapshot, never of a name. The calibration table below shows every multiple with the number of live protocols behind it.</dd>
-    <dt>Growth</dt>
-    <dd>The 7-day TVL change, clamped to −40%…+60%. Gains are dampened with a square root (a +60% week is worth +30%); losses count in full (a −40% week costs −20%).</dd>
+    <dt>Sector multiple — fitted, not assumed</dt>
+    <dd>Each category's multiple is fitted to the snapshot's own live-token protocols, not taken from a table. The fit is a log-log regression of market cap on TVL — log(mcap) = a + b·log(TVL) — run on the category's live protocols with market caps winsorised at the 90th percentile (2.975×). The fitted curve is blended in log space with the category's static median (the radar-4 figure: winsorised, shrunk toward the global median with weight n / (n + 4), clamped to 0.02–1.50) at weight n / (n + 4). A category with fewer than 5 live protocols takes the global curve (slope 0.563, R² 0.268); a category with none takes the global median. The blended multiple is clamped to 0.02–1.50, so a steep curve cannot extrapolate a multiple past any multiple the market shows for a whole sector. The multiple is a property of the snapshot, never of a name. The fitted table below shows every category's slope, its multiple at $100M and $1B of TVL, and the blind-test error that decided whether it uses the curve or the median — and the detail view shows the comps themselves.</dd>
+    <dt>Implied FDV</dt>
+    <dd>The snapshot carries no FDV and no supply data, so no per-category FDV multiple can be observed from it. The FDV column applies the entry's own uniform listing assumption instead: FDV = market cap × 12.5, i.e. 8% of supply circulating at listing, the figure ICO pricing guides cite (Optimism's observed FDV / market cap is 12.9×). The sector FDV / TVL multiple is the fitted sector multiple × 12.5 — the curve is fitted on market cap, and the FDV column is that same curve shifted by log 12.5. It is a comparison bound, printed here and never hidden — and it never moves a rank: the board ranks on implied market cap alone.</dd>
+    <dt>Blind validation — only what passes is used</dt>
+    <dd>Every term in the model is tested on data it never saw. Leave-one-out: each of the 128 live protocols is held out in turn and predicted from the rest; the selected model — curve or median per category, chosen by that same leave-one-out error — misses by 1.750 in mean absolute log error, against 1.876 for the plain median and 1.815 for using the curve everywhere. Walk-forward: fit on protocols listed before 1 Jan 2024 and test on the 51 listed after (1.850 vs 1.853 for the median); fit before 1 Jan 2025 and test on the 31 after (1.910 vs 1.906 — the median wins this split by 0.004). The curve is used only where its leave-one-out error beats the median's: 27 of 34 categories. The 7 that stay on the median are CEX, Canonical Bridge, Derivatives, Lending, Liquid Restaking, Payments and Yield. The table below shows both errors per category, so a reader can see exactly where the curve earned its place and where it did not.</dd>
+    <dt>Net value — farm, thin or skip</dt>
+    <dd>Every farm plan is netted to the dollar. Expected value is 20% × min($3,000, 0.01% of the protocol's implied FDV): only about 20% of airdrops pay meaningfully, a typical wallet's allocation runs $1,000–$3,000 (Arbitrum's typical; Hyperliquid paid tens of thousands), and 0.01% is the entry's own wallet-share assumption, stated here. All-in cost is the chain's gas and bridge for 12 weeks plus 12 hours of time at $25 an hour — about $304–$308, and the time is the biggest part. Net = expected value − all-in. Farm when net is +$100 or better, Skip when it is −$100 or worse, Thin in between. The break-even allocation is the all-in cost itself, and the break-even FDV is all-in × 50,000. The detail view shows the expected value, the all-in, the net and the verdict for the row — 176 rows are Farm, 22 Thin, 10 Skip.</dd>
+    <dt>Rank ranges — 200 refits</dt>
+    <dd>The board's order is a point estimate, and the middle of the board is dense: neighbouring ranks swap on small calibration moves. Each row carries its rank range across 200 refits — the 128 live comps resampled with replacement, the curves and medians re-fitted, the board re-scored and re-ranked, the 5th–95th percentile rank kept. The refits are seeded, so they reproduce exactly. The top of the board is stable (rank 1 sits at #1–#1, rank 2 at #2–#2); the median row's range spans 66 places, and 129 of 208 rows span more than 50. Read neighbouring ranks as a band, not a ladder.</dd>
+    <dt>Growth — the radar's own formula, printed in full</dt>
+    <dd>The 7-day TVL change, clamped to −40%…+60%. Gains: growth = 1 + 0.30 × √(growth / 60%), so a +60% week is worth +30%. Losses: growth = 1 + 0.50 × (growth / 100), so a −40% week costs −20%. No published standard growth-adjusted market-cap / TVL formula exists, so this adjustment is the radar's own, stated here rather than hidden — and the detail view shows the base value beside the growth-adjusted one, so a reader can see exactly what the week's move did.</dd>
     <dt>Maturity</dt>
     <dd>0.55 + 0.45 × min(age, 1095 days) / 1095. A protocol tracked under 90 days takes a 0.85 youth discount; one with no listing date is scored at 365 days.</dd>
     <dt>Chains</dt>
@@ -87,58 +105,60 @@
   <h2>What counts as pre-token</h2>
   <p>A protocol records no token when its DefiLlama record carries no market cap, no CoinGecko id and no symbol. The board keeps every protocol on the snapshot's watchlist and adds every other pre-token protocol below the floor that is not a wrapped, staked or bridged product of a token that already trades and not an exchange product. A name ending in a release (V2, V3, 2.0) is a deployment, not a protocol: the board keeps a versioned protocol once, at its latest deployment — Aera V3, not V2 beside it — and a versioned row whose family has no other deployment in the snapshot is kept as it stands. The watchlist is the floor, never the ceiling: 168 of this board's 208 rows sit below it. A protocol is said to record no token, never to have none — its record may simply not carry one.</p>
   <h2>How to read a farm plan</h2>
-  <p>Each plan is eight steps derived from the protocol's own record — its category, its chains, its TVL and its age — with a cost and a time on every step. Capital is sized to the protocol: $50 under $100M TVL, $100 under $1B, $150 under $5B, $250 above. Hold windows run 30 to 60 days by age. The last step names the category's main risk in plain words. No step quotes a yield the snapshot does not carry: the rate a protocol pays is read from its own rewards page, never invented here. Never pay to claim: a real claim costs nothing but gas, and only the link the protocol itself publishes is the claim.</p>
+  <p>Each plan is eight steps over 12 weeks, derived from the protocol's own record — its category, its chains and its age — with a cost and a time on every step. Capital follows the chain's tier: Ethereum $1,000 and up, Arbitrum and Optimism $100–$500, Base $50–$300, Solana $50–$500. Gas is the October 2026 guide's per-chain figure (Ethereum $0.25–$0.39 a swap, Arbitrum $0.01–$0.05, Base $0.003–$0.03, Optimism $0.02–$0.05, Solana $0.00025); bridging from mainnet to a rollup costs $2–$10, and withdrawing from one back takes 7 days. Every plan prices its time — 1 hour a week × 12 weeks = 12 hours, about $300 at $25 an hour — because gas is the smallest cost and time is the biggest. Every plan states the odds: only about 20% of airdrops pay meaningfully, most pay under $100 a wallet, many tokens fall 70–90% in the first month, and sybil filters disqualify about 40% of claimants. Step 5 of every plan does the netting: it prints the expected value, the all-in cost, the net and the break-even, and the verdict — Farm, Thin or Skip — so a plan that costs more than it can pay is labelled Skip on the row itself. No step quotes a yield the snapshot does not carry: the rate a protocol pays is read from its own rewards page, never invented here. Never pay to claim: a real claim costs nothing but gas, and only the link the protocol itself publishes is the claim.</p>
   <h2>Why this model</h2>
-  <p>The question is what a token would be worth if a protocol launched one, and the only market evidence for that is what the market already pays for the same kind of protocol: the median market-cap / TVL of the live-token protocols in its category. A median, not a mean, so one frothy token cannot set a sector. Ratios are winsorised at the 90th percentile (2.975× here) for the same reason, and a category's median is shrunk toward the global median with weight n / (n + 4), so a category with one live protocol — 12 of the 34 here rest on a single comp — cannot price itself off one data point. Growth is dampened because a single hot week is mostly noise, while a falling week is information. Maturity rewards survival: a protocol that has run for years with no token has earned the right to be scored at full weight, and a protocol under 90 days is discounted because it has not. Thin TVL is discounted because it can vanish. Nothing in the model names a protocol: the same five factors score every row, and the board is the whole rankable set the snapshot holds.</p>
-  <h2>Calibration — every sector multiple, with its sample size</h2>
-  <p>The multiples below are the model's own calibration, computed from the sealed snapshot's 128 live-token protocols. "Multiple" is the shrunk, clamped figure the board uses; "median" is the raw winsorised median ratio behind it; "n" is how many live protocols the category rests on. A category with no live protocol takes the global median, 0.214×.</p>
+  <p>The question is what a token would be worth if a protocol launched one, and the only market evidence for that is what the market already pays for the same kind of protocol: the median market-cap / TVL of the live-token protocols in its category. A median, not a mean, so one frothy token cannot set a sector. Ratios are winsorised at the 90th percentile (2.975× here) for the same reason, and a category's median is shrunk toward the global median with weight n / (n + 4), so a category with one live protocol — 12 of the 34 here rest on a single comp — cannot price itself off one data point. The FDV column runs the same evidence through the entry's stated 12.5× listing assumption, so the two columns disagree exactly where supply still has to unlock. The size term itself is fitted, not assumed: a log-log curve of market cap on TVL per sector, blended with the median, and the blind test — not the builder — decides per sector which one the board uses. Growth is dampened because a single hot week is mostly noise, while a falling week is information — and the adjustment is printed, with the base beside the adjusted figure, so it can be checked. Maturity rewards survival: a protocol that has run for years with no token has earned the right to be scored at full weight, and a protocol under 90 days is discounted because it has not. Thin TVL is discounted because it can vanish. Nothing in the model names a protocol: the same five factors score every row, and the board is the whole rankable set the snapshot holds.</p>
+  <h2>Fitted curves — every sector's size curve, with its blind-test error</h2>
+  <p>The table below is the model's own calibration, fitted to the sealed snapshot's 128 live-token protocols. "Slope" is the log-log slope of market cap on TVL (1.0 means the multiple is flat in size; below 1.0 big protocols are worth less per TVL dollar; above 1.0 they are worth more). "Median" is the radar-4 static figure — the shrunk, clamped market-cap / TVL median the curve is blended with. "Fit @ $100M" and "Fit @ $1B" are the blended multiple a protocol of that TVL would get in the category (flat for the seven median categories). "LOO blend" and "LOO median" are the leave-one-out mean absolute log errors: the lower one wins, and "Method" shows which the board uses. A category with fewer than 5 live protocols takes the global curve (slope 0.563); the global row shows that curve. The FDV multiple for a category is its fitted multiple × 12.5, under the listing assumption above.</p>
   <div class="table-scroll"><table class="cal">
-    <thead><tr><th>Category</th><th class="num">Multiple</th><th class="num">Live comps (n)</th><th class="num">Median ratio</th></tr></thead>
+    <thead><tr><th>Category</th><th class="num">Live comps (n)</th><th class="num">Slope</th><th class="num">Median</th><th class="num">Fit @ $100M</th><th class="num">Fit @ $1B</th><th class="num">LOO blend</th><th class="num">LOO median</th><th>Method</th></tr></thead>
     <tbody>
-<tr><td>Derivatives</td><td class="num">0.863&times;</td><td class="num">2</td><td class="num">2.162&times;</td></tr>
-<tr><td>Chain</td><td class="num">0.766&times;</td><td class="num">1</td><td class="num">2.975&times;</td></tr>
-<tr><td>Collateral Management</td><td class="num">0.766&times;</td><td class="num">1</td><td class="num">2.975&times;</td></tr>
-<tr><td>Prediction Market</td><td class="num">0.766&times;</td><td class="num">1</td><td class="num">2.975&times;</td></tr>
-<tr><td>Risk Curators</td><td class="num">0.766&times;</td><td class="num">1</td><td class="num">2.975&times;</td></tr>
-<tr><td>Cross Chain Bridge</td><td class="num">0.717&times;</td><td class="num">4</td><td class="num">1.220&times;</td></tr>
-<tr><td>Token Locker</td><td class="num">0.649&times;</td><td class="num">2</td><td class="num">1.520&times;</td></tr>
-<tr><td>Decentralized AI</td><td class="num">0.583&times;</td><td class="num">1</td><td class="num">2.060&times;</td></tr>
-<tr><td>NFT Marketplace</td><td class="num">0.571&times;</td><td class="num">1</td><td class="num">2.002&times;</td></tr>
-<tr><td>Canonical Bridge</td><td class="num">0.569&times;</td><td class="num">8</td><td class="num">0.746&times;</td></tr>
-<tr><td>Privacy</td><td class="num">0.538&times;</td><td class="num">3</td><td class="num">0.969&times;</td></tr>
-<tr><td>Basis Trading</td><td class="num">0.494&times;</td><td class="num">7</td><td class="num">0.654&times;</td></tr>
-<tr><td>Options</td><td class="num">0.474&times;</td><td class="num">1</td><td class="num">1.515&times;</td></tr>
-<tr><td>Bridge</td><td class="num">0.420&times;</td><td class="num">6</td><td class="num">0.557&times;</td></tr>
-<tr><td>AI Agents</td><td class="num">0.344&times;</td><td class="num">2</td><td class="num">0.605&times;</td></tr>
-<tr><td>Dexs</td><td class="num">0.308&times;</td><td class="num">11</td><td class="num">0.342&times;</td></tr>
-<tr><td>RWA</td><td class="num">0.256&times;</td><td class="num">9</td><td class="num">0.275&times;</td></tr>
-<tr><td>Leveraged Farming</td><td class="num">0.206&times;</td><td class="num">1</td><td class="num">0.172&times;</td></tr>
-<tr><td>Liquid Restaking</td><td class="num">0.203&times;</td><td class="num">2</td><td class="num">0.183&times;</td></tr>
-<tr><td>Payments</td><td class="num">0.203&times;</td><td class="num">2</td><td class="num">0.181&times;</td></tr>
-<tr><td>Yield</td><td class="num">0.198&times;</td><td class="num">9</td><td class="num">0.191&times;</td></tr>
-<tr><td>Launchpad</td><td class="num">0.197&times;</td><td class="num">1</td><td class="num">0.131&times;</td></tr>
-<tr><td>CDP</td><td class="num">0.194&times;</td><td class="num">3</td><td class="num">0.169&times;</td></tr>
-<tr><td>DOR</td><td class="num">0.189&times;</td><td class="num">1</td><td class="num">0.090&times;</td></tr>
-<tr><td>Indexes</td><td class="num">0.185&times;</td><td class="num">3</td><td class="num">0.148&times;</td></tr>
-<tr><td>Yield Aggregator</td><td class="num">0.182&times;</td><td class="num">4</td><td class="num">0.151&times;</td></tr>
-<tr><td>Dual-Token Stablecoin</td><td class="num">0.177&times;</td><td class="num">1</td><td class="num">0.032&times;</td></tr>
-<tr><td>Liquidity Manager</td><td class="num">0.174&times;</td><td class="num">1</td><td class="num">0.015&times;</td></tr>
-<tr><td>Restaking</td><td class="num">0.151&times;</td><td class="num">2</td><td class="num">0.025&times;</td></tr>
-<tr><td>Lending</td><td class="num">0.150&times;</td><td class="num">15</td><td class="num">0.132&times;</td></tr>
-<tr><td>Onchain Capital Allocator</td><td class="num">0.147&times;</td><td class="num">2</td><td class="num">0.012&times;</td></tr>
-<tr><td>Staking Pool</td><td class="num">0.143&times;</td><td class="num">2</td><td class="num">0.002&times;</td></tr>
-<tr><td>CEX</td><td class="num">0.118&times;</td><td class="num">9</td><td class="num">0.075&times;</td></tr>
-<tr><td>Liquid Staking</td><td class="num">0.094&times;</td><td class="num">9</td><td class="num">0.041&times;</td></tr>
-<tr class="total"><td>Global median (all 128 live protocols)</td><td class="num">0.214&times;</td><td class="num">128</td><td class="num">0.214&times;</td></tr>
+<tr><td>AI Agents</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.344&times;</td><td class="num">0.256&times;</td><td class="num">0.183&times;</td><td class="num">0.667</td><td class="num">0.710</td><td>blend</td></tr>
+<tr><td>Basis Trading</td><td class="num">7</td><td class="num">0.553</td><td class="num">0.494&times;</td><td class="num">0.390&times;</td><td class="num">0.203&times;</td><td class="num">1.346</td><td class="num">1.607</td><td>blend</td></tr>
+<tr><td>Bridge</td><td class="num">6</td><td class="num">0.757</td><td class="num">0.420&times;</td><td class="num">0.253&times;</td><td class="num">0.181&times;</td><td class="num">2.325</td><td class="num">2.490</td><td>blend</td></tr>
+<tr><td>CDP</td><td class="num">3</td><td class="num">0.563</td><td class="num">0.194&times;</td><td class="num">0.170&times;</td><td class="num">0.111&times;</td><td class="num">1.190</td><td class="num">1.275</td><td>blend</td></tr>
+<tr><td>CEX</td><td class="num">9</td><td class="num">0.795</td><td class="num">0.118&times;</td><td class="num">0.118&times;</td><td class="num">0.118&times;</td><td class="num">2.002</td><td class="num">1.845</td><td>median</td></tr>
+<tr><td>Canonical Bridge</td><td class="num">8</td><td class="num">0.545</td><td class="num">0.569&times;</td><td class="num">0.569&times;</td><td class="num">0.569&times;</td><td class="num">2.531</td><td class="num">2.340</td><td>median</td></tr>
+<tr><td>Chain</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.766&times;</td><td class="num">0.547&times;</td><td class="num">0.447&times;</td><td class="num">2.693</td><td class="num">2.693</td><td>blend</td></tr>
+<tr><td>Collateral Management</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.766&times;</td><td class="num">0.547&times;</td><td class="num">0.447&times;</td><td class="num">4.083</td><td class="num">4.083</td><td>blend</td></tr>
+<tr><td>Cross Chain Bridge</td><td class="num">4</td><td class="num">0.563</td><td class="num">0.717&times;</td><td class="num">0.320&times;</td><td class="num">0.193&times;</td><td class="num">1.671</td><td class="num">2.082</td><td>blend</td></tr>
+<tr><td>DOR</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.189&times;</td><td class="num">0.179&times;</td><td class="num">0.146&times;</td><td class="num">0.909</td><td class="num">0.909</td><td>blend</td></tr>
+<tr><td>Decentralized AI</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.583&times;</td><td class="num">0.440&times;</td><td class="num">0.360&times;</td><td class="num">2.308</td><td class="num">2.308</td><td>blend</td></tr>
+<tr><td>Derivatives</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.863&times;</td><td class="num">0.863&times;</td><td class="num">0.863&times;</td><td class="num">1.316</td><td class="num">1.253</td><td>median</td></tr>
+<tr><td>Dexs</td><td class="num">11</td><td class="num">1.766</td><td class="num">0.308&times;</td><td class="num">0.873&times;</td><td class="num">1.500&times;</td><td class="num">1.900</td><td class="num">1.983</td><td>blend</td></tr>
+<tr><td>Dual-Token Stablecoin</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.177&times;</td><td class="num">0.170&times;</td><td class="num">0.139&times;</td><td class="num">1.952</td><td class="num">1.952</td><td>blend</td></tr>
+<tr><td>Indexes</td><td class="num">3</td><td class="num">0.563</td><td class="num">0.185&times;</td><td class="num">0.166&times;</td><td class="num">0.108&times;</td><td class="num">1.831</td><td class="num">2.009</td><td>blend</td></tr>
+<tr><td>Launchpad</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.197&times;</td><td class="num">0.185&times;</td><td class="num">0.151&times;</td><td class="num">0.534</td><td class="num">0.534</td><td>blend</td></tr>
+<tr><td>Lending</td><td class="num">15</td><td class="num">1.385</td><td class="num">0.150&times;</td><td class="num">0.150&times;</td><td class="num">0.150&times;</td><td class="num">1.935</td><td class="num">1.781</td><td>median</td></tr>
+<tr><td>Leveraged Farming</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.206&times;</td><td class="num">0.191&times;</td><td class="num">0.156&times;</td><td class="num">0.256</td><td class="num">0.256</td><td>blend</td></tr>
+<tr><td>Liquid Restaking</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.203&times;</td><td class="num">0.203&times;</td><td class="num">0.203&times;</td><td class="num">1.665</td><td class="num">1.606</td><td>median</td></tr>
+<tr><td>Liquid Staking</td><td class="num">9</td><td class="num">0.571</td><td class="num">0.094&times;</td><td class="num">0.069&times;</td><td class="num">0.035&times;</td><td class="num">1.162</td><td class="num">1.571</td><td>blend</td></tr>
+<tr><td>Liquidity Manager</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.174&times;</td><td class="num">0.167&times;</td><td class="num">0.137&times;</td><td class="num">2.695</td><td class="num">2.695</td><td>blend</td></tr>
+<tr><td>NFT Marketplace</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.571&times;</td><td class="num">0.433&times;</td><td class="num">0.354&times;</td><td class="num">2.279</td><td class="num">2.279</td><td>blend</td></tr>
+<tr><td>Onchain Capital Allocator</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.147&times;</td><td class="num">0.145&times;</td><td class="num">0.104&times;</td><td class="num">2.589</td><td class="num">2.837</td><td>blend</td></tr>
+<tr><td>Options</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.474&times;</td><td class="num">0.373&times;</td><td class="num">0.305&times;</td><td class="num">2.000</td><td class="num">2.000</td><td>blend</td></tr>
+<tr><td>Payments</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.203&times;</td><td class="num">0.203&times;</td><td class="num">0.203&times;</td><td class="num">0.323</td><td class="num">0.307</td><td>median</td></tr>
+<tr><td>Prediction Market</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.766&times;</td><td class="num">0.547&times;</td><td class="num">0.447&times;</td><td class="num">7.577</td><td class="num">7.577</td><td>blend</td></tr>
+<tr><td>Privacy</td><td class="num">3</td><td class="num">0.563</td><td class="num">0.538&times;</td><td class="num">0.304&times;</td><td class="num">0.198&times;</td><td class="num">1.750</td><td class="num">1.791</td><td>blend</td></tr>
+<tr><td>RWA</td><td class="num">9</td><td class="num">0.392</td><td class="num">0.256&times;</td><td class="num">0.200&times;</td><td class="num">0.076&times;</td><td class="num">0.626</td><td class="num">0.952</td><td>blend</td></tr>
+<tr><td>Restaking</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.151&times;</td><td class="num">0.148&times;</td><td class="num">0.106&times;</td><td class="num">1.686</td><td class="num">2.050</td><td>blend</td></tr>
+<tr><td>Risk Curators</td><td class="num">1</td><td class="num">0.563</td><td class="num">0.766&times;</td><td class="num">0.547&times;</td><td class="num">0.447&times;</td><td class="num">2.675</td><td class="num">2.675</td><td>blend</td></tr>
+<tr><td>Staking Pool</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.143&times;</td><td class="num">0.143&times;</td><td class="num">0.102&times;</td><td class="num">4.560</td><td class="num">4.888</td><td>blend</td></tr>
+<tr><td>Token Locker</td><td class="num">2</td><td class="num">0.563</td><td class="num">0.649&times;</td><td class="num">0.392&times;</td><td class="num">0.280&times;</td><td class="num">3.359</td><td class="num">3.574</td><td>blend</td></tr>
+<tr><td>Yield</td><td class="num">9</td><td class="num">0.708</td><td class="num">0.198&times;</td><td class="num">0.198&times;</td><td class="num">0.198&times;</td><td class="num">1.867</td><td class="num">1.550</td><td>median</td></tr>
+<tr><td>Yield Aggregator</td><td class="num">4</td><td class="num">0.563</td><td class="num">0.182&times;</td><td class="num">0.161&times;</td><td class="num">0.097&times;</td><td class="num">1.149</td><td class="num">1.347</td><td>blend</td></tr>
+<tr class="total"><td>Global curve (all 128 live protocols)</td><td class="num">128</td><td class="num">0.563</td><td class="num">0.214&times;</td><td class="num">0.143&times;</td><td class="num">0.052&times;</td><td class="num">1.815</td><td class="num">1.876</td><td>curve</td></tr>
     </tbody>
   </table></div>
   <h2>Worked example — rank 1, Steakhouse Financial</h2>
-  <p>Steakhouse Financial (Risk Curators) holds $2,753,981,495 of TVL, tracked for 543 days on 11 chains, its TVL down 2.2% in the last 7 days. Its sector multiple is 0.766&times;, so its base value is $2,109,549,825. Growth is &times;0.989, maturity &times;0.773, chains &times;1.069 and risk &times;1.000 (its TVL is far above the $10M thin line), giving an implied value of $1,724,513,717 — the board's rank 1. Factors are shown rounded to three decimals; the board uses the full-precision factors.</p>
+  <p>Steakhouse Financial (Risk Curators) holds $2,753,981,495 of TVL, tracked for 543 days on 11 chains, its TVL down 2.2% in the last 7 days. Risk Curators rests on a single live protocol, so its size curve is the global curve (slope 0.563, intercept 6.106): at this TVL the curve alone would price it at 0.034&times;, the sector median is 0.766&times;, and the blend — 20% curve, 80% median, because n = 1 — gives a sector multiple of 0.409&times;. Its base value is $1,127,685,764; its sector FDV multiple is 5.118&times; (the sector multiple &times; 12.5 at full precision), so its base FDV is $14,096,072,048. Growth is &times;0.989, so the growth-adjusted value is $1,115,317,870. Maturity &times;0.773, chains &times;1.069 and risk &times;1.000 give an implied value of $921,874,955 and an implied FDV of $11,523,436,940 — the board's rank 1, and its rank across 200 refits is #1–#1. Its net value is +$293 (expected value about $600 minus $307 all-in), so its farm plan reads Farm. Factors are shown rounded to three decimals; the board uses the full-precision factors, so recomputing from the printed figures agrees within about 0.2%.</p>
 </section>
 
 <footer class="foot">
   <p id="source"></p>
-  <p>Token Radar · model radar-3 · implied values are this entry's own claim, never a prediction that a token will be issued or what it will be worth.</p>
+  <p>Methodology: every figure on this page is computed from the sealed DefiLlama snapshot dated 14 Nov 2026 — TVL, 7-day change, age and chains per protocol, and the sector multiples from the snapshot's own 128 live-token protocols. Nothing is fetched live, and no protocol name is special-cased.</p>
+  <p>Not financial advice. Implied values are this entry's own claim, never a prediction that a token will be issued or what it will be worth. A protocol that records no token may still have one its record does not carry.</p>
+  <p>Token Radar · model radar-5 · data as of 14 Nov 2026 · source: DefiLlama protocols endpoint.</p>
 </footer>
 
 <script src="../data.js"></script>

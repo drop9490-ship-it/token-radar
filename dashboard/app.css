@@ -38,14 +38,17 @@ body {
 .meta { margin: 0 0 16px; color: var(--faint); font-size: 13px; }
 
 .stats {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
   padding: 0 28px 16px;
 }
 .stat {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 12px 14px;
 }
-.stat b { display: block; font-size: 24px; color: var(--green); font-variant-numeric: tabular-nums; }
+/* KPI numbers are ink, never green: green and red mean up and down only. */
+.stat b { display: block; font-size: 24px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.stat.mover.up b { color: var(--green); }
+.stat.mover.down b { color: var(--red); }
 .stat span { color: var(--dim); font-size: 13px; }
 
 .controls {
@@ -59,6 +62,17 @@ body {
   padding: 8px 10px; font: inherit; min-width: 150px;
 }
 .controls input:focus, .controls select:focus { outline: 2px solid var(--green); outline-offset: 1px; }
+
+/* Applied filters as removable chips, with a result count and Clear all. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 28px 12px; }
+.chip-label { color: var(--dim); font-size: 13px; margin-right: 4px; }
+.chip {
+  background: #1a2c50; color: var(--blue);
+  border: 1px solid var(--line); border-radius: 20px;
+  padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.chip.clear { background: transparent; color: var(--dim); }
+.chip:hover { border-color: var(--blue); }
 .views { display: flex; gap: 0; margin-left: auto; }
 .views button {
   background: var(--panel); color: var(--dim);
@@ -75,9 +89,12 @@ body {
 .board-wrap { min-width: 0; }
 .count { color: var(--dim); margin: 0 0 8px; font-size: 13px; }
 .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
-table { width: 100%; border-collapse: collapse; background: var(--panel); font-size: 14px; }
-th, td { padding: 8px 8px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); font-size: 13px; }
+th, td { padding: 7px 6px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; position: sticky; top: 0; background: var(--panel-2); }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--ink); }
+th .arrow { color: var(--green); font-size: 10px; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr { cursor: pointer; }
 tbody tr:hover td { background: #16233f; }
@@ -92,6 +109,14 @@ td .pill {
   border-radius: 20px; padding: 1px 8px; font-size: 12px;
 }
 .note { color: var(--faint); font-size: 13px; }
+.pager { display: flex; gap: 12px; align-items: center; color: var(--dim); font-size: 13px; margin: 10px 0 0; }
+.pager button {
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 12px; font: inherit; cursor: pointer;
+}
+.pager button:disabled { color: var(--faint); cursor: default; }
+.pager button:not(:disabled):hover { border-color: var(--green); }
 
 .detail {
   background: var(--panel); border: 1px solid var(--line);
@@ -103,8 +128,11 @@ td .pill {
 .detail .sub { color: var(--dim); margin: 0 0 12px; font-size: 13px; }
 .detail h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); }
 .math { width: 100%; border-collapse: collapse; }
+.math th { padding: 5px 0; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--faint); border-bottom: 1px solid var(--line); white-space: normal; }
+.math th.num { text-align: right; }
 .math td { padding: 5px 0; border-bottom: 1px dashed var(--line); white-space: normal; }
 .math td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.math td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .math tr.total td { font-weight: 700; color: var(--amber); border-bottom: none; }
 .steps { margin: 0; padding-left: 20px; }
 .steps li { margin: 0 0 10px; }
@@ -113,6 +141,24 @@ td .pill {
 .badge {
   display: inline-block; background: #123524; color: var(--green);
   border-radius: 20px; padding: 1px 9px; font-size: 12px; margin-right: 6px;
+}
+.early {
+  display: inline-block; background: #1a2c50; color: var(--dim);
+  border-radius: 20px; padding: 1px 9px; font-size: 12px;
+}
+/* Verdict pills: decision signals (go / caution / pass), not price deltas —
+   green and red stay reserved for up/down moves elsewhere on the page. */
+.v-farm {
+  display: inline-block; background: #123524; color: var(--green);
+  border-radius: 20px; padding: 1px 9px; font-size: 12px; font-weight: 700;
+}
+.v-thin {
+  display: inline-block; background: #3a2a08; color: var(--amber);
+  border-radius: 20px; padding: 1px 9px; font-size: 12px; font-weight: 700;
+}
+.v-skip {
+  display: inline-block; background: #1a2c50; color: var(--faint);
+  border-radius: 20px; padding: 1px 9px; font-size: 12px;
 }
 
 .model { padding: 8px 28px 0; max-width: 980px; }
