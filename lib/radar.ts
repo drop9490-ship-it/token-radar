@@ -1,4 +1,4 @@
-// Token Radar's model (radar-5): one sealed snapshot in, one ranked board out.
+// Token Radar's model (radar-6): one sealed snapshot in, one ranked board out.
 //
 // The board covers every slug on the snapshot's watchlist (the floor, never the
 // ceiling) and adds every other pre-token protocol below the floor that passes
@@ -34,6 +34,13 @@
 //               The blend is a property of the snapshot,
 //               never of a name — and, crucially, it is only used where a
 //               blind test says it earns its place (see below).
+//               The calibration runs on ONE comp per token family: the live
+//               set is deduped by family first (latest deployment per
+//               family, the same rule the board uses), so one family can
+//               never count several times. On this snapshot the 128 live
+//               protocols already are one per family, so the dedup removes
+//               none — the count stays 128 — but the property now holds by
+//               construction and is stated, not assumed.
 //   growth    = change_7d clamped to [-40, +60] per cent; gains are
 //               dampened with a square root (a +60% week is worth +30%),
 //               losses count in full (a -40% week costs -20%). This is the
@@ -60,11 +67,15 @@
 // Blind validation: every model term is tested out of sample before it is
 // used. For each category the model runs leave-one-out over the live comps
 // — fit without one comp, predict it — for the blended curve and for the
-// static median alone, and uses whichever has the smaller mean absolute log
-// error. It also runs walk-forward: fit on protocols listed before a cutoff
-// date, test on those listed after. The dashboard prints the errors, the
-// method each category uses, and the walk-forward results. A term the blind
-// test does not keep is not in the model.
+// static median alone, and it also runs walk-forward: fit on protocols
+// listed before a cutoff date, test on those listed after. The method a
+// category uses is chosen by the COMBINED blind evidence: the leave-one-out
+// mean error plus the walk-forward mean error (both splits pooled), the
+// lower combined error wins. The dashboard prints the errors, the method
+// each category uses, and the walk-forward results — and it says plainly
+// that the walk-forward numbers are the errors of the method the combined
+// evidence chose, not a held-out check of it. A term the blind test does
+// not keep is not in the model.
 //
 // Implied FDV: the snapshot carries no FDV and no supply data, so no
 // per-category FDV multiple can be observed from it. The dashboard still
@@ -76,10 +87,15 @@
 // column is a comparison bound, never observed market data, and it never
 // moves a rank — the board ranks on implied market cap alone.
 //
-// Net value: every farm plan is netted to dollars. Expected value =
+// Net value: every farm plan is netted to dollars, at the conservative
+// end. Expected value =
 // 0.20 (the share of airdrops that pay meaningfully, per the research) x
-// min($3,000, 0.01% of implied FDV) — the $3,000 cap is the Arbitrum-typical
-// top allocation, the 0.01% wallet share the entry's own assumption. Net =
+// min($3,000, 0.01% of the protocol's LOW-END implied FDV) — the $3,000 cap
+// is the Arbitrum-typical top allocation, the 0.01% wallet share the entry's
+// own assumption. The low end is the 5th percentile of the implied FDV
+// across the same 200 bootstrap refits that give the rank ranges, so a
+// row whose value the calibration cannot pin down is netted on what it is
+// worth at the bottom of its range, not on its point estimate. Net =
 // expected value - all-in cost (gas + bridge + 12 hours of time). Verdict:
 // net >= $100 Farm; net <= -$100 Skip; between them Thin. The assumptions
 // are printed on the page with the arithmetic.
@@ -87,6 +103,9 @@
 // Rank ranges: the model refits itself 200 times on bootstrap resamples of
 // the live comps (seeded, so every run agrees) and records each row's rank
 // across the refits; the detail view shows the 5th–95th percentile range.
+// The same refits give each row's low-end implied FDV (the 5th percentile
+// of its refit FDVs), which is what the netting above uses — and the
+// detail view shows that low-end value beside the point estimate.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -189,7 +208,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -219,14 +238,16 @@ export interface BoardRow {
   implied_value_usd: number;
   /** The implied fully diluted value: base FDV through the same five factors. Never a rank key. */
   implied_fdv_usd: number;
+  /** The 5th percentile of the row's implied FDV across the 200 bootstrap refits: the conservative value the netting uses. */
+  implied_fdv_low_usd: number;
   /** The 5th–95th percentile rank across the 200 bootstrap refits. */
   rank_lo: number;
   rank_hi: number;
-  /** Expected value of farming this row: meaningful-probability x min(cap, wallet share of implied FDV). */
+  /** Expected value of farming this row, from the LOW-END implied FDV: 0.20 x min($3,000, 0.01% of implied_fdv_low_usd). */
   ev_usd: number;
   /** The all-in cost of the 12-week farm plan on this row's chain (gas + bridge + 12 hours of time), midpoint. */
   all_in_usd: number;
-  /** Expected value minus all-in cost. */
+  /** Expected value (low end) minus all-in cost. */
   net_usd: number;
   /** Farm when net >= 100, Skip when net <= -100, Thin between. */
   verdict: 'Farm' | 'Thin' | 'Skip';
@@ -270,6 +291,8 @@ export interface RadarRow {
   age_days: number | null;
   implied_value_usd: number;
   implied_fdv_usd: number;
+  /** The 5th percentile of the row's implied FDV across the 200 bootstrap refits: the conservative value the netting uses. */
+  implied_fdv_low_usd: number;
   rank_lo: number;
   rank_hi: number;
   ev_usd: number;
@@ -328,7 +351,11 @@ export interface CategoryFit {
   looBlend: number;
   /** Leave-one-out mean absolute log error of the static median alone. */
   looMedian: number;
-  /** Which the blind test kept for this category. */
+  /** Walk-forward mean absolute log error of the blended curve, both splits pooled; null when no test comp falls in this category. */
+  wfBlend: number | null;
+  /** Walk-forward mean absolute log error of the static median alone, both splits pooled; null when no test comp falls in this category. */
+  wfMedian: number | null;
+  /** Which the combined blind evidence (leave-one-out + walk-forward) kept for this category. */
   method: 'blend' | 'median';
   /** The static shrunk median multiple (the radar-4 figure). */
   median: number;
@@ -550,12 +577,17 @@ export interface SectorMultiples {
  * (mcap/TVL x fdv_expansion), so the FDV multiples are medians of the live
  * comps too, under the entry's stated listing assumption.
  */
-export function sectorMultiples(protocols: SnapshotProtocol[], model: ModelConstants = MODEL): SectorMultiples {
+export function sectorMultiples(protocols: SnapshotProtocol[], model: ModelConstants = MODEL, liveOverride?: SnapshotProtocol[]): SectorMultiples {
+  // One comp per token family (liveComps dedups by family first): a family
+  // with several deployments calibrates once, at its latest deployment.
+  // A caller that already holds a live set — the bootstrap's resample,
+  // which keeps duplicates on purpose — passes it as liveOverride, and it
+  // is used as it stands, with no second dedup.
   // A live token whose market cap reads 0 has no measurable market: it is
   // not a calibration point. (15 snapshot rows carry mcap_usd 0; counting
   // them would drag the global median from 0.205 to 0.169 and move the
   // 90th-percentile cap, so they are excluded here.)
-  const live = protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const live = liveOverride ?? liveComps(protocols);
   const run = (scale: number): { global: number; byCategory: Record<string, number>; byCategoryMedian: Record<string, number> } => {
     const ratios = live.map((p) => ((p.mcap_usd as number) / p.tvl_usd) * scale).sort((a, b) => a - b);
     const capAt = ratios.length === 0 ? 0 : ratios[Math.min(ratios.length - 1, Math.floor(model.winsorise_quantile * ratios.length))]!;
@@ -603,9 +635,10 @@ export function multipleFor(p: SnapshotProtocol, multiples: SectorMultiples): nu
   return m === undefined ? multiples.global : m;
 }
 
-/** The live-token protocols a calibration runs on: a token that trades, with a measurable market cap. */
+/** The live-token protocols a calibration runs on: a token that trades, with a measurable market cap. One per token family: the set is deduped by family first (latest deployment per family, the same rule the board uses in dedupVersions), so one family can never count several times. On this snapshot the 128 live protocols already are one per family, so the dedup removes none. */
 export function liveComps(protocols: SnapshotProtocol[]): SnapshotProtocol[] {
-  return protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const live = protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  return dedupVersions(live, new Set());
 }
 
 /** A log-log size curve: log(mcap) = intercept + slope * log(TVL). */
@@ -692,12 +725,19 @@ function meanOf(xs: number[]): number {
 }
 
 /**
- * The blind-selected method per category from a leave-one-out run: the blend
- * where its mean absolute log error is no worse than the static median's,
- * the median where it is not. Categories absent from the run take the median.
+ * The method per category from the COMBINED blind evidence: leave-one-out
+ * plus walk-forward. For each category the combined score of a method is
+ * its leave-one-out mean absolute log error plus its walk-forward mean
+ * absolute log error (both walk-forward splits pooled); the lower combined
+ * score wins, ties go to the blend. A category with no walk-forward test
+ * comp is decided by leave-one-out alone. The walk-forward test comps
+ * therefore help choose the method — the walk-forward numbers the dashboard
+ * prints are the errors of the method the combined evidence chose, not a
+ * held-out check of it — and the dashboard says so.
  */
 export function selectMethods(
   loo: { perComp: { slug: string; category: string; errBlend: number; errMedian: number }[] },
+  wfByCat: Map<string, { b: number[]; m: number[] }>,
 ): Map<string, 'blend' | 'median'> {
   const byCat = new Map<string, { b: number[]; m: number[] }>();
   for (const c of loo.perComp) {
@@ -707,7 +747,12 @@ export function selectMethods(
     byCat.set(c.category, e);
   }
   const methods = new Map<string, 'blend' | 'median'>();
-  for (const [cat, e] of byCat) methods.set(cat, meanOf(e.b) <= meanOf(e.m) ? 'blend' : 'median');
+  for (const [cat, e] of byCat) {
+    const w = wfByCat.get(cat);
+    const combinedBlend = meanOf(e.b) + (w === undefined ? 0 : meanOf(w.b));
+    const combinedMedian = meanOf(e.m) + (w === undefined ? 0 : meanOf(w.m));
+    methods.set(cat, combinedBlend <= combinedMedian ? 'blend' : 'median');
+  }
   return methods;
 }
 
@@ -727,9 +772,11 @@ export interface FittedModel {
 
 /**
  * The whole fitted model from the snapshot's live comps: static medians,
- * size curves, per-category blind selection, and the walk-forward check.
- * The walk-forward re-runs the blind selection on the training side only,
- * so the held-out comps never choose the method that predicts them.
+ * size curves, per-category selection by the combined blind evidence
+ * (leave-one-out + walk-forward), and the walk-forward numbers for the
+ * method the combined evidence chose. The walk-forward test comps help
+ * choose the method, so the reported walk-forward errors are the errors of
+ * the chosen method, not a held-out check of it — the dashboard says so.
  */
 export function buildFittedModel(protocols: SnapshotProtocol[], model: ModelConstants = MODEL): FittedModel {
   const live = liveComps(protocols);
@@ -737,7 +784,29 @@ export function buildFittedModel(protocols: SnapshotProtocol[], model: ModelCons
   const capAt = winsoriseCap(live, model);
   const globalCurve = fitCurve(live, capAt);
   const loo = leaveOneOut(live, model);
-  const methods = selectMethods(loo);
+  // Walk-forward: fit before each cutoff, test after it. Both methods'
+  // errors are recorded per test comp, pooled by category across the
+  // splits, so the combined selection can use them.
+  const wfByCat = new Map<string, { b: number[]; m: number[] }>();
+  const wfSplits: { cutoff: string; train: number; test: number; rows: { category: string; errBlend: number; errMedian: number }[] }[] = [];
+  for (const cutoff of ['2024-01-01', '2025-01-01']) {
+    const train = live.filter((p) => p.listed_at !== null && p.listed_at < cutoff);
+    const test = live.filter((p) => p.listed_at !== null && p.listed_at >= cutoff);
+    if (train.length === 0 || test.length === 0) continue;
+    const rows = test.map((p) => {
+      const { blend, median } = predictLogs(p, train, model);
+      const actual = Math.log(p.mcap_usd as number);
+      return { category: p.category ?? '(none)', errBlend: Math.abs(blend - actual), errMedian: Math.abs(median - actual) };
+    });
+    for (const r of rows) {
+      const e = wfByCat.get(r.category) ?? { b: [], m: [] };
+      e.b.push(r.errBlend);
+      e.m.push(r.errMedian);
+      wfByCat.set(r.category, e);
+    }
+    wfSplits.push({ cutoff, train: train.length, test: test.length, rows });
+  }
+  const methods = selectMethods(loo, wfByCat);
   const byCat = new Map<string, SnapshotProtocol[]>();
   for (const p of live) {
     const k = p.category ?? '(none)';
@@ -752,6 +821,7 @@ export function buildFittedModel(protocols: SnapshotProtocol[], model: ModelCons
       const usesGlobalCurve = n < model.curve_min_n;
       const curve = usesGlobalCurve ? globalCurve : fitCurve(comps, capAt);
       const errs = loo.perComp.filter((c) => c.category === cat);
+      const wf = wfByCat.get(cat);
       return {
         category: cat,
         n,
@@ -760,29 +830,24 @@ export function buildFittedModel(protocols: SnapshotProtocol[], model: ModelCons
         r2: curve.r2,
         looBlend: meanOf(errs.map((e) => e.errBlend)),
         looMedian: meanOf(errs.map((e) => e.errMedian)),
+        wfBlend: wf === undefined ? null : meanOf(wf.b),
+        wfMedian: wf === undefined ? null : meanOf(wf.m),
         method: methods.get(cat) ?? 'median',
         median: multiples.byCategory[cat] ?? multiples.global,
         usesGlobalCurve,
       };
     });
   const selectedErrs = loo.perComp.map((c) => ((methods.get(c.category) ?? 'median') === 'blend' ? c.errBlend : c.errMedian));
-  const walkForward: WalkForwardResult[] = [];
-  for (const cutoff of ['2024-01-01', '2025-01-01']) {
-    const train = live.filter((p) => p.listed_at !== null && p.listed_at < cutoff);
-    const test = live.filter((p) => p.listed_at !== null && p.listed_at >= cutoff);
-    if (train.length === 0 || test.length === 0) continue;
-    const trainMethods = selectMethods(leaveOneOut(train, model));
-    const errsS: number[] = [];
-    const errsM: number[] = [];
-    for (const p of test) {
-      const { blend, median } = predictLogs(p, train, model);
-      const actual = Math.log(p.mcap_usd as number);
-      const chosen = trainMethods.get(p.category ?? '(none)') ?? 'median';
-      errsS.push(Math.abs((chosen === 'blend' ? blend : median) - actual));
-      errsM.push(Math.abs(median - actual));
-    }
-    walkForward.push({ cutoff, train: train.length, test: test.length, maeSelected: meanOf(errsS), maeMedian: meanOf(errsM) });
-  }
+  // The walk-forward numbers under the method the combined evidence chose:
+  // each split's selected error is the mean error of the combined-selected
+  // method on that split's held-out comps.
+  const walkForward: WalkForwardResult[] = wfSplits.map((s) => ({
+    cutoff: s.cutoff,
+    train: s.train,
+    test: s.test,
+    maeSelected: meanOf(s.rows.map((r) => ((methods.get(r.category) ?? 'median') === 'blend' ? r.errBlend : r.errMedian))),
+    maeMedian: meanOf(s.rows.map((r) => r.errMedian)),
+  }));
   const validation: ValidationResult = {
     looSelected: meanOf(selectedErrs),
     looMedian: meanOf(loo.perComp.map((c) => c.errMedian)),
@@ -919,9 +984,9 @@ function chainCosts(chain: string): ChainCosts {
   }
 }
 
-/** The net value of farming one protocol: expected value minus all-in cost. */
+/** The net value of farming one protocol: expected value (low end) minus all-in cost. */
 export interface NetValue {
-  /** 0.20 x min($3,000, 0.01% of implied FDV): the expected allocation in dollars. */
+  /** 0.20 x min($3,000, 0.01% of the LOW-END implied FDV): the expected allocation in dollars. */
   ev: number;
   /** The 12-week farm's all-in cost on this row's chain. */
   allIn: number;
@@ -934,14 +999,18 @@ export interface NetValue {
 /**
  * Whether a farm pays for itself, in dollars. The expected allocation is
  * the meaningful-probability (0.20: only about 20% of airdrops pay
- * meaningfully) times a meaningful allocation, taken as 0.01% of implied
- * FDV and capped at $3,000 (the Arbitrum-typical top). Both the share and
- * the cap are the entry's own assumptions, printed on the page with the
- * arithmetic — the snapshot carries no allocation data.
+ * meaningfully) times a meaningful allocation, taken as 0.01% of the
+ * LOW-END implied FDV and capped at $3,000 (the Arbitrum-typical top).
+ * The caller passes the low-end FDV — the 5th percentile of the implied
+ * FDV across the 200 bootstrap refits — so a row whose value the
+ * calibration cannot pin down is netted on what it is worth at the bottom
+ * of its range, not on its point estimate. Both the share and the cap are
+ * the entry's own assumptions, printed on the page with the arithmetic —
+ * the snapshot carries no allocation data.
  */
-export function netValue(impliedFdv: number, chain: string, model: ModelConstants = MODEL): NetValue {
+export function netValue(impliedFdvLow: number, chain: string, model: ModelConstants = MODEL): NetValue {
   const allIn = chainCosts(chain).allInMid;
-  const ev = Math.round(model.ev_meaningful_prob * Math.min(model.ev_cap_usd, impliedFdv * model.ev_wallet_share));
+  const ev = Math.round(model.ev_meaningful_prob * Math.min(model.ev_cap_usd, impliedFdvLow * model.ev_wallet_share));
   const net = ev - allIn;
   const verdict = net >= model.verdict_farm_min ? 'Farm' : net <= model.verdict_skip_max ? 'Skip' : 'Thin';
   return { ev, allIn, net, verdict };
@@ -1063,7 +1132,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, net?: NetValu
     : `Unwind in two steps so you keep gas to exit. Claim only from the link the protocol itself publishes, never pay to claim, never share a seed phrase; decide before claim day whether to keep, sell part or sell all.`;
   const netStep = net === undefined
     ? `Add up the cost before you start: gas for 12 weeks is ${costs.gas12w}, plus ${costs.bridge}, so the on-chain cost is small — but time is 1 hour a week x 12 weeks = 12 hours, about $300 at $25 an hour, and that is the biggest cost.`
-    : `Add up the cost before you start: gas for 12 weeks is ${costs.gas12w}, plus ${costs.bridge}, so the on-chain cost is small — but time is 1 hour a week x 12 weeks = 12 hours, about $300 at $25 an hour, and that is the biggest cost. Net: expected value about $${net.ev} (20% x min($3,000, 0.01% of implied FDV $${Math.round(net.impliedFdv).toLocaleString('en-US')})) minus $${net.allIn} all-in is about $${net.net}. Break-even needs an allocation of $${net.allIn}. Verdict: ${net.verdict}.`;
+    : `Add up the cost before you start: gas for 12 weeks is ${costs.gas12w}, plus ${costs.bridge}, so the on-chain cost is small — but time is 1 hour a week x 12 weeks = 12 hours, about $300 at $25 an hour, and that is the biggest cost. Net, at the low end: expected value about $${net.ev} (20% x min($3,000, 0.01% of low-end implied FDV $${Math.round(net.impliedFdv).toLocaleString('en-US')})) minus $${net.allIn} all-in is about $${net.net}. Break-even needs an allocation of $${net.allIn}. Verdict: ${net.verdict}.`;
   return [
     {
       text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
@@ -1120,26 +1189,34 @@ export function mulberry32(seed: number): () => number {
 }
 
 /**
- * Each board row's rank range across bootstrap refits: resample the live
- * comps with replacement, refit the curves and medians (the blind-selected
- * methods stay fixed — the refits measure calibration uncertainty, not
- * method choice), re-score and re-rank. Returns the 5th and 95th
- * percentile rank per slug.
+ * Each board row's rank range across bootstrap refits — and its low-end
+ * implied FDV: resample the live comps with replacement, refit the curves
+ * and medians (the blind-selected methods stay fixed — the refits measure
+ * calibration uncertainty, not method choice), re-score and re-rank.
+ * Returns the 5th and 95th percentile rank per slug, and the 5th
+ * percentile of the row's refit implied FDVs — the conservative value the
+ * netting uses. The resample is passed to sectorMultiples as it stands:
+ * its duplicates are the bootstrap, and a second family dedup would
+ * destroy them.
  */
 export function bootstrapRankRanges(
   snapshot: Snapshot,
   rows: { p: SnapshotProtocol }[],
   fitted: FittedModel,
   model: ModelConstants = MODEL,
-): Map<string, { lo: number; hi: number }> {
+): Map<string, { lo: number; hi: number; fdvLo: number }> {
   const live = liveComps(snapshot.protocols);
   const rand = mulberry32(model.bootstrap_seed);
   const ranks = new Map<string, number[]>();
-  for (const { p } of rows) ranks.set(p.slug, []);
+  const fdvs = new Map<string, number[]>();
+  for (const { p } of rows) {
+    ranks.set(p.slug, []);
+    fdvs.set(p.slug, []);
+  }
   for (let r = 0; r < model.bootstrap_refits; r++) {
     const resampled: SnapshotProtocol[] = [];
     for (let i = 0; i < live.length; i++) resampled.push(live[Math.floor(rand() * live.length)]!);
-    const multiples = sectorMultiples(resampled, model);
+    const multiples = sectorMultiples(resampled, model, resampled);
     const capAt = winsoriseCap(resampled, model);
     const globalCurve = fitCurve(resampled, capAt);
     const byCat = new Map<string, SnapshotProtocol[]>();
@@ -1163,16 +1240,24 @@ export function bootstrapRankRanges(
       const multiple = Math.exp(w * curveLog + (1 - w) * medianLog) / p.tvl_usd;
       return Math.min(model.multiple_cap, Math.max(model.multiple_floor, multiple));
     };
-    const scored = rows.map(({ p }) => ({ slug: p.slug, implied: impliedFromMultiple(p, snapshot.as_of, multipleAt(p), model).implied }));
+    const scored = rows.map(({ p }) => {
+      const v = impliedFromMultiple(p, snapshot.as_of, multipleAt(p), model);
+      return { slug: p.slug, implied: v.implied, impliedFdv: v.impliedFdv };
+    });
     scored.sort((a, b) => b.implied - a.implied || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
-    scored.forEach((s, i) => ranks.get(s.slug)!.push(i + 1));
+    scored.forEach((s, i) => {
+      ranks.get(s.slug)!.push(i + 1);
+      fdvs.get(s.slug)!.push(s.impliedFdv);
+    });
   }
-  const out = new Map<string, { lo: number; hi: number }>();
+  const out = new Map<string, { lo: number; hi: number; fdvLo: number }>();
   for (const [slug, rs] of ranks) {
     const sorted = [...rs].sort((a, b) => a - b);
     const lo = sorted[Math.floor(0.05 * (sorted.length - 1))]!;
     const hi = sorted[Math.floor(0.95 * (sorted.length - 1))]!;
-    out.set(slug, { lo, hi });
+    const fsorted = [...fdvs.get(slug)!].sort((a, b) => a - b);
+    const fdvLo = fsorted[Math.floor(0.05 * (fsorted.length - 1))]!;
+    out.set(slug, { lo, hi, fdvLo });
   }
   return out;
 }
@@ -1205,10 +1290,17 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     return { p, v };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  const withNet = scored.map((s, i) => ({ ...s, rank: i + 1, net: netValue(s.v.impliedFdv, chainOf(s.p), model) }));
-  const ranges = bootstrapRankRanges(snapshot, withNet, fitted, model);
+  // The bootstrap runs before the netting: the netting uses each row's
+  // low-end implied FDV (the 5th percentile of its 200 refit FDVs), not
+  // its point estimate — a row whose value the calibration cannot pin down
+  // is netted on what it is worth at the bottom of its range.
+  const ranges = bootstrapRankRanges(snapshot, scored, fitted, model);
+  const withNet = scored.map((s, i) => {
+    const range = ranges.get(s.p.slug) ?? { lo: i + 1, hi: i + 1, fdvLo: s.v.impliedFdv };
+    return { ...s, rank: i + 1, range, fdvLo: range.fdvLo, net: netValue(range.fdvLo, chainOf(s.p), model) };
+  });
   return withNet.map((s) => {
-    const range = ranges.get(s.p.slug) ?? { lo: s.rank, hi: s.rank };
+    const range = s.range;
     const curve = fitted.curveFor(s.p);
     return {
       rank: s.rank,
@@ -1226,6 +1318,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       age_days: s.v.age,
       implied_value_usd: s.v.implied,
       implied_fdv_usd: s.v.impliedFdv,
+      implied_fdv_low_usd: Math.round(s.fdvLo),
       rank_lo: range.lo,
       rank_hi: range.hi,
       ev_usd: s.net.ev,
@@ -1248,7 +1341,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
         risk_multiplier: round4(s.v.riskMult),
         age_days: s.v.age,
       },
-      farm_steps: farmSteps(s.p, s.v.age, { ...s.net, impliedFdv: s.v.impliedFdv }).map(stepText),
+      farm_steps: farmSteps(s.p, s.v.age, { ...s.net, impliedFdv: s.fdvLo }).map(stepText),
     };
   });
 }
@@ -1287,6 +1380,7 @@ export function radarRow(row: BoardRow, watchlist?: Set<string>): RadarRow {
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
     implied_fdv_usd: row.implied_fdv_usd,
+    implied_fdv_low_usd: row.implied_fdv_low_usd,
     rank_lo: row.rank_lo,
     rank_hi: row.rank_hi,
     ev_usd: row.ev_usd,
@@ -1315,7 +1409,8 @@ export function radarRow(row: BoardRow, watchlist?: Set<string>): RadarRow {
  * judge reads agrees with the multiples the model uses.
  */
 export function compTable(snapshot: Snapshot, multiples: SectorMultiples): Record<string, CompRow[]> {
-  const live = snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  // One comp per token family, the same set the calibration runs on.
+  const live = liveComps(snapshot.protocols);
   const ratios = live.map((p) => (p.mcap_usd as number) / p.tvl_usd).sort((a, b) => a - b);
   const capAt = ratios.length === 0 ? 0 : ratios[Math.min(ratios.length - 1, Math.floor(MODEL.winsorise_quantile * ratios.length))]!;
   const table: Record<string, CompRow[]> = {};

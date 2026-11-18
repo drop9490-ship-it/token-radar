@@ -11,8 +11,9 @@
 // by leave-one-out error, and risk is 0.90 for TVL under $10M, else 1.00.
 // Implied FDV runs the same five factors over the sector FDV / TVL multiple
 // (mcap / TVL x 12.5, the entry's stated listing assumption: 8% of supply
-// circulating at listing). Net value = 20% x min($3,000, 0.01% of implied
-// FDV) - all-in cost; Farm at +$100, Skip at -$100, Thin between.
+// circulating at listing). Net value = 20% x min($3,000, 0.01% of the
+// LOW-END implied FDV — the 5th percentile of the 200 bootstrap refits)
+// - all-in cost; Farm at +$100, Skip at -$100, Thin between.
 
 (function () {
   'use strict';
@@ -233,7 +234,7 @@
       '<td class="num">' + r.rank + '</td>' +
       '<td><span class="name">' + esc(r.name) + '</span><br><span class="slug">' + esc(r.slug) + '</span></td>' +
       '<td>' + (r.category ? '<span class="pill">' + esc(r.category) + '</span>' : '—') + '</td>' +
-      '<td>' + esc(r.chains.slice(0, 2).join(', ')) + (r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') + '</td>' +
+      '<td>' + esc(r.chains[0] || '—') + (r.chains.length > 1 ? ' +' + (r.chains.length - 1) : '') + '</td>' +
       '<td class="num">' + money(r.tvl_usd) + '</td>' +
       '<td class="num ' + chgCls + '">' + pct(chg) + '</td>' +
       '<td class="num">' + ageText(r.age_days) + '</td>' +
@@ -274,7 +275,7 @@
         '<td class="num">' + (i + 1) + '</td>' +
         '<td><span class="name">' + esc(p.name) + '</span><br><span class="slug">' + esc(p.slug) + '</span></td>' +
         '<td>' + (p.category ? '<span class="pill">' + esc(p.category) + '</span>' : '—') + '</td>' +
-        '<td>' + esc(p.chains.slice(0, 2).join(', ')) + (p.chains.length > 2 ? ' +' + (p.chains.length - 2) : '') + '</td>' +
+        '<td>' + esc(p.chains[0] || '—') + (p.chains.length > 1 ? ' +' + (p.chains.length - 1) : '') + '</td>' +
         '<td class="num">' + money(p.tvl_usd) + '</td>' +
         '<td class="num ' + chgCls + '">' + pct(chg) + '</td>' +
         '<td class="num">—</td>' +
@@ -315,7 +316,12 @@
         ? 'blend with the global curve, slope ' + fit.slope.toFixed(3) + ' — ' + fit.n + ' live comp' + (fit.n === 1 ? '' : 's') + ' in this category'
         : 'blend, curve slope ' + (fit ? fit.slope.toFixed(3) : '—');
     } else {
-      methodNote = 'median — the curve lost the blind test here (LOO ' + (fit ? fit.looBlend.toFixed(3) : '—') + ' vs ' + (fit ? fit.looMedian.toFixed(3) : '—') + ')';
+      methodNote = 'median — the combined blind evidence kept the median here';
+    }
+    if (fit) {
+      methodNote += ' (LOO ' + fit.looBlend.toFixed(3) + ' vs ' + fit.looMedian.toFixed(3);
+      if (fit.wfBlend != null && fit.wfMedian != null) methodNote += '; walk-forward ' + fit.wfBlend.toFixed(3) + ' vs ' + fit.wfMedian.toFixed(3);
+      methodNote += ')';
     }
     var steps = r.farm_steps.map(function (s) {
       return '<li>' + esc(s) + '</li>';
@@ -354,13 +360,14 @@
       '<p class="note">Growth is the radar\u2019s own formula, printed in the Model section: gains 1 + 0.30 × √(growth / 60%), losses 1 + 0.50 × growth / 100. No published standard growth-adjusted multiple exists.</p>' +
       '<h3>Net value — ' + esc(r.verdict) + '</h3>' +
       '<table class="math"><tbody>' +
-      mathRow('Expected value (20% × min($3,000, 0.01% of implied FDV))', moneyFull(r.ev_usd)) +
+      mathRow('Implied FDV, low end (5th percentile of 200 refits)', moneyFull(r.implied_fdv_low_usd)) +
+      mathRow('Expected value, low end (20% × min($3,000, 0.01% of low-end FDV))', moneyFull(r.ev_usd)) +
       mathRow('All-in cost (gas + bridge + 12 h at $25/h)', moneyFull(r.all_in_usd)) +
       '<tr class="total"><td>Net value</td><td>' + netStr + '</td></tr>' +
       mathRow('Break-even allocation', moneyFull(r.all_in_usd)) +
-      mathRow('Break-even implied FDV', moneyFull(r.all_in_usd * 50000)) +
+      mathRow('Break-even implied FDV (low end)', moneyFull(r.all_in_usd * 50000)) +
       '</tbody></table>' +
-      '<p class="note">Farm at +$100 or better, Skip at −$100 or worse, Thin in between. The expected value assumes a typical wallet takes 0.01% of the implied FDV and only 20% of airdrops pay meaningfully — the entry\u2019s own assumptions, stated in the Model section.</p>' +
+      '<p class="note">Farm at +$100 or better, Skip at −$100 or worse, Thin in between. The expected value is netted at the low end: a typical wallet takes 0.01% of the low-end implied FDV and only 20% of airdrops pay meaningfully — the entry\u2019s own assumptions, stated in the Model section.</p>' +
       '<h3>Live comps behind the ' + esc(r.category || 'global') + ' multiple</h3>' + compHtml +
       '<h3>Farm plan — 8 steps over 12 weeks</h3>' +
       '<ol class="steps">' + steps + '</ol>' +

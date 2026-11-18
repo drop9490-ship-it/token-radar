@@ -83,14 +83,14 @@ body {
 .views button.on { background: var(--green); color: #06130c; border-color: var(--green); font-weight: 700; }
 
 .layout {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
-  gap: 16px; padding: 0 28px; align-items: start;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 320px);
+  gap: 12px; padding: 0 24px; align-items: start;
 }
 .board-wrap { min-width: 0; }
 .count { color: var(--dim); margin: 0 0 8px; font-size: 13px; }
 .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
 table { width: 100%; border-collapse: collapse; background: var(--panel); font-size: 13px; }
-th, td { padding: 7px 6px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th, td { padding: 6px 5px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; position: sticky; top: 0; background: var(--panel-2); }
 th[data-sort] { cursor: pointer; user-select: none; }
 th[data-sort]:hover { color: var(--ink); }
@@ -100,7 +100,7 @@ tbody tr { cursor: pointer; }
 tbody tr:hover td { background: #16233f; }
 tbody tr.sel td { background: #1a2c50; }
 td .name { font-weight: 650; }
-td .slug { color: var(--faint); font-size: 12px; }
+td .slug { color: var(--faint); font-size: 12px; white-space: normal; word-break: break-all; }
 td .val { color: var(--amber); font-weight: 700; }
 td .up { color: var(--green); }
 td .down { color: var(--red); }
